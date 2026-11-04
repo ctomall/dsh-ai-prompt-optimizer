@@ -1,0 +1,5 @@
+# One Host row: the authenticated streaming endpoint the browser control calls.
+# The browser half is declared by package.json's `dsh.client` section.
+- insert:
+    - id: prompt-optimizer
+      name: '@local/ai-prompt-optimizer'

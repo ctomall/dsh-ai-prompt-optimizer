@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AI Prompt Optimizer",
+    "description": "Rewrites the composer draft into a clearer, more complete prompt with the current model, then copies it or puts it back into the composer."
+  }
+}
