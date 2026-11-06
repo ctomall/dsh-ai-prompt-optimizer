@@ -97,14 +97,19 @@ window.__ModuleLoader__.load({
 
 .apo-dock{box-sizing:border-box;width:100%;display:flex;justify-content:center;padding:0 6px 6px}
 /* Floating drawer: out of the composer's flex row, anchored bottom-right. */
-.apo-drawer{position:fixed;right:calc(env(safe-area-inset-right,0px) + var(--apo-drawer-right,20px));bottom:calc(env(safe-area-inset-bottom,0px) + var(--apo-drawer-bottom,160px));z-index:80;isolation:isolate;display:flex;justify-content:flex-end;width:min(var(--apo-drawer-width,560px),calc(100vw - 32px));pointer-events:none;animation:apo-drawer-in .18s cubic-bezier(.22,.61,.36,1)}
+.apo-drawer{position:fixed;right:calc(env(safe-area-inset-right,0px) + var(--apo-drawer-right,20px));bottom:calc(env(safe-area-inset-bottom,0px) + var(--apo-drawer-bottom,160px));z-index:80;isolation:isolate;display:flex;justify-content:flex-end;width:min(var(--apo-drawer-width,560px),calc(100vw - 32px));pointer-events:none}
 .apo-drawer .apo-panel{pointer-events:auto;max-width:100%;border-radius:16px;box-shadow:0 28px 64px -28px rgba(0,0,0,.6),0 2px 8px rgba(0,0,0,.16)}
-.apo-drawer .apo-output{max-height:min(46vh,320px)}
+/* Keep the drawer inside the visible area: the panel caps its own height and the
+   body scrolls, so a short viewport (phone keyboard, small window) never pushes
+   the window above the top edge. */
+.apo-drawer .apo-panel{max-height:var(--apo-drawer-max,min(560px,calc(100dvh - 24px)))}
+.apo-drawer .apo-body{flex:1 1 auto;min-height:0;overflow:auto}
+.apo-drawer .apo-head,.apo-drawer .apo-modes,.apo-drawer .apo-foot{flex:none}
+.apo-drawer .apo-output{max-height:none}
+@media (max-height:560px){.apo-drawer .apo-modes{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.apo-drawer .apo-chip{flex:none}}
 /* The drawer floats over chat content, so nothing may show through it. */
 .apo-drawer .apo-foot{background:var(--dsw-alias-bg-overlay)}
 .apo-drawer .apo-panel{backdrop-filter:blur(2px)}
-@keyframes apo-drawer-in{from{transform:translateY(12px) scale(.985)}to{transform:none}}
-@media (prefers-reduced-motion:reduce){.apo-drawer{animation:none}}
 @media (max-width:520px){.apo-drawer{right:12px;left:12px;width:auto}}
 .apo-panel{position:relative;box-sizing:border-box;width:100%;max-width:680px;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);box-shadow:0 14px 34px -14px rgba(0,0,0,.34),0 1px 2px rgba(0,0,0,.10);animation:apo-in .16s ease-out}
 @keyframes apo-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -535,6 +540,9 @@ window.__ModuleLoader__.load({
         optimizer.setInputActions(inputActions)
       }, [optimizer, inputActions])
       const panelRef = React.useRef(null)
+      // The floating container owns the anchor variables; the panel is its child,
+      // so variables written on the panel would never reach the drawer's CSS.
+      const drawerRef = React.useRef(null)
 
       React.useEffect(() => {
         if (!state.open) return undefined
@@ -568,18 +576,50 @@ window.__ModuleLoader__.load({
           return parent instanceof Element ? parent : dock
         }
         const apply = () => {
-          const node = panelRef.current
+          const node = drawerRef.current
           if (node === null) return
-          const card = cardOf(node)
+          const card = cardOf(panelRef.current ?? node)
           const rect = card === null ? null : card.getBoundingClientRect()
-          const bottom = rect === null ? 160 : Math.max(16, window.innerHeight - rect.top + 8)
+          // Measure against the visual viewport: on a phone the layout viewport
+          // still spans the keyboard, so innerHeight alone would float the drawer
+          // into the covered strip.
+          const view = window.visualViewport
+          const viewHeight = view === null || view === undefined ? window.innerHeight : view.height
+          const viewTop = view === null || view === undefined ? 0 : view.offsetTop
+          const cardTop = rect === null ? viewHeight - 152 : rect.top
           const right = rect === null ? 20 : Math.max(12, window.innerWidth - rect.right)
-          node.style.setProperty('--apo-drawer-bottom', `${Math.round(bottom)}px`)
-          node.style.setProperty('--apo-drawer-right', `${Math.round(right)}px`)
+          // Cap the panel to the space above the composer card, so it always fits
+          // instead of hanging off the top edge of a short viewport.
+          const space = Math.round(cardTop - viewTop - 8)
+          // Prefer the room above the card; fall back to overlapping the composer
+          // (the top clamp below keeps it on screen) when that room is tiny.
+          const maxHeight = Math.min(Math.round(viewHeight - 16), Math.max(200, space))
+          node.style.setProperty('--apo-drawer-max', `${maxHeight}px`)
           if (rect !== null) node.style.setProperty('--apo-drawer-width', `${Math.round(Math.min(rect.width, 680))}px`)
+          node.style.setProperty('--apo-drawer-right', `${Math.round(right)}px`)
+          // Two passes: the capped height is known only after the max-height lands.
+          // Keep the panel's top edge inside the viewport; on a viewport too short
+          // for the composer it overlaps the composer instead of leaving the screen.
+          const height = node.getBoundingClientRect().height
+          const wanted = rect === null ? viewHeight - 160 : cardTop - 8 - height
+          const top = Math.max(8, Math.min(wanted, viewHeight - 8 - height))
+          const bottom = Math.round(viewHeight - top - height)
+          node.style.setProperty('--apo-drawer-bottom', `${Math.max(8, bottom)}px`)
+          // A transformed or will-change ancestor makes this drawer's fixed
+          // containing block that ancestor rather than the viewport, so the
+          // viewport-relative bottom above can land a little off. Measure the
+          // result and correct: top = constant - bottom.
+          const placed = node.getBoundingClientRect()
+          const drift = Math.round(placed.top - top)
+          if (Math.abs(drift) > 1) {
+            node.style.setProperty('--apo-drawer-bottom', `${Math.max(8, Math.round(viewHeight - top - height + drift))}px`)
+          }
         }
         apply()
         window.addEventListener('resize', apply)
+        const view = window.visualViewport
+        view?.addEventListener('resize', apply)
+        view?.addEventListener('scroll', apply)
         let observer = null
         const card = cardOf(panelRef.current)
         if (card !== null && typeof ResizeObserver === 'function') {
@@ -588,6 +628,8 @@ window.__ModuleLoader__.load({
         }
         return () => {
           window.removeEventListener('resize', apply)
+          view?.removeEventListener('resize', apply)
+          view?.removeEventListener('scroll', apply)
           observer?.disconnect()
         }
       }, [state.open, position, state.output.length])
@@ -701,7 +743,11 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: position === 'below' ? 'apo-drawer' : 'apo-dock', 'data-prompt-optimizer': position },
+        {
+          className: position === 'below' ? 'apo-drawer' : 'apo-dock',
+          'data-prompt-optimizer': position,
+          ref: drawerRef,
+        },
         h(
           'div',
           {
